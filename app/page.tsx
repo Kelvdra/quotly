@@ -108,91 +108,100 @@ function drawMediaCover(ctx: CanvasRenderingContext2D, img: HTMLImageElement, x:
   ctx.restore();
 }
 
-async function setupCanvas(canvas: HTMLCanvasElement) {
+async function setupCanvas(canvas: HTMLCanvasElement, displayScale = 1) {
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
   const W = 512;
   const H = 768;
   canvas.width = Math.floor(W * dpr);
   canvas.height = Math.floor(H * dpr);
-  canvas.style.width = `${W}px`;
-  canvas.style.height = `${H}px`;
+  // Preview display scaling:
+  // On mobile, the preview container can be narrower than 512px.
+  // Keep the render bitmap fixed for quality, but scale the CSS display size.
+  const s = Math.max(0.1, Math.min(1, displayScale || 1));
+  canvas.style.width = `${Math.round(W * s)}px`;
+  canvas.style.height = `${Math.round(H * s)}px`;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas context tidak tersedia');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   return { ctx, W, H };
 }
 
-async function renderCardToCanvas(canvas: HTMLCanvasElement, input: QuoteInput) {
-  const dpr = window.devicePixelRatio || 1;
-  const W = 512;
-  const H = 768;
+async function renderCardToCanvas(canvas: HTMLCanvasElement, input: QuoteInput, displayScale = 1) {
+  const { ctx, W, H } = await setupCanvas(canvas, displayScale);
 
-  canvas.width = Math.floor(W * dpr);
-  canvas.height = Math.floor(H * dpr);
-
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('Canvas context tidak tersedia');
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
+  // theme
   const isDark = input.theme === 'dark';
   const bg = isDark ? '#0B141A' : '#FFFFFF';
   const card = isDark ? '#111B21' : '#F5F6F6';
   const textMain = isDark ? '#E9EDEF' : '#111B21';
   const textSub = isDark ? '#AEBAC1' : '#667781';
-  const accent = '#25D366';
+  const accent = '#25D366'; // WhatsApp green
 
+  // background
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, W, H);
 
+  // card layout
   const padding = 28;
   const cardX = padding;
+  const cardY = padding;
   const cardW = W - padding * 2;
 
+  // preload images
   const avatarUrl = input.avatar?.trim() || 'https://telegra.ph/file/1e22e45892774893eb1b9.jpg';
   const [avatarImg, mediaImg] = await Promise.all([
     loadImage(avatarUrl).catch(() => null),
     input.media?.trim() ? loadImage(input.media.trim()).catch(() => null) : Promise.resolve(null),
   ]);
 
+  // fonts
   ctx.textBaseline = 'top';
   const nameFont = '600 18px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial';
   const bodyFont = '400 18px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial';
   const smallFont = '400 14px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial';
 
+  // calculate dynamic height
   const avatarSize = 44;
   const headerH = 56;
   const innerPad = 18;
+  const contentX = cardX + innerPad;
+  let y = cardY + innerPad;
+
+  // measure body lines
+  ctx.font = bodyFont;
   const maxTextW = cardW - innerPad * 2;
 
+  // media block
   const mediaH = mediaImg ? 220 : 0;
-  const hasReply = Boolean(input.replyName.trim());
-  let replyH = 0;
 
+  // reply block
+  const hasReply = Boolean(input.replyName.trim());
+  const replyW = maxTextW;
+
+  // measure reply height
+  let replyH = 0;
   if (hasReply) {
     ctx.font = smallFont;
-    const rn = wrapText(ctx, input.replyName.trim(), maxTextW - 18);
-    const rt = wrapText(ctx, (input.replyText || '').trim(), maxTextW - 18);
-    replyH = clamp(12 + rn.length * 18 + rt.length * 18 + 10, 56, 140);
+    const replyNameLines = wrapText(ctx, input.replyName.trim(), replyW - 18);
+    const replyTextLines = wrapText(ctx, (input.replyText || '').trim(), replyW - 18);
+    replyH = 12 + replyNameLines.length * 18 + replyTextLines.length * 18 + 10;
+    replyH = clamp(replyH, 56, 140);
   }
 
+  // measure main text height
   ctx.font = bodyFont;
   const bodyLines = wrapText(ctx, input.text || '', maxTextW);
   const lineH = 26;
-  const bodyH = Math.min(bodyLines.length, 14) * lineH;
+  const bodyH = Math.min(bodyLines.length, 14) * lineH; // cap lines
 
   const spacing = 14;
   let cardH = innerPad + headerH;
   if (mediaH) cardH += mediaH + spacing;
   if (replyH) cardH += replyH + spacing;
-  cardH += bodyH + innerPad + 18;
+  cardH += bodyH + innerPad + 18; // bottom for timestamp-ish
   cardH = Math.min(cardH, H - padding * 2);
 
-  const safe = 18;
-  const cardY = clamp((H - cardH) / 2, safe, H - cardH - safe);
-
-  const contentX = cardX + innerPad;
-  let y = cardY + innerPad;
-
+  // draw card
   ctx.save();
   ctx.shadowColor = 'rgba(0,0,0,0.12)';
   ctx.shadowBlur = 18;
@@ -202,37 +211,44 @@ async function renderCardToCanvas(canvas: HTMLCanvasElement, input: QuoteInput) 
   ctx.fill();
   ctx.restore();
 
+  // header: avatar
   const avCX = cardX + innerPad + avatarSize / 2;
   const avCY = y + (headerH - avatarSize) / 2 + avatarSize / 2;
-  if (avatarImg) drawAvatar(ctx, avatarImg, avCX, avCY, avatarSize);
-  else {
+  if (avatarImg) {
+    drawAvatar(ctx, avatarImg, avCX, avCY, avatarSize);
+  } else {
     ctx.fillStyle = isDark ? '#1F2C34' : '#DDE4E7';
     ctx.beginPath();
     ctx.arc(avCX, avCY, avatarSize / 2, 0, Math.PI * 2);
     ctx.fill();
   }
 
+  // name
   const nameX = avCX + avatarSize / 2 + 12;
   ctx.font = nameFont;
   ctx.fillStyle = accent;
   ctx.fillText(input.name || 'Unknown', nameX, y + 6);
 
+  // subline
   ctx.font = smallFont;
   ctx.fillStyle = textSub;
-  ctx.fillText('WhatsApp • quotly generator', nameX, y + 30);
+  const sub = 'WhatsApp • quotly generator';
+  ctx.fillText(sub, nameX, y + 30);
 
   y += headerH;
 
+  // media
   if (mediaH && mediaImg) {
     y += 2;
     drawMediaCover(ctx, mediaImg, contentX, y, maxTextW, mediaH, 16);
     y += mediaH + spacing;
   }
 
+  // reply box
   if (replyH) {
     const rx = contentX;
     const ry = y;
-    const rw = maxTextW;
+    const rw = replyW;
     const rh = replyH;
 
     ctx.fillStyle = isDark ? '#2A3942' : '#FFFFFF';
@@ -243,12 +259,15 @@ async function renderCardToCanvas(canvas: HTMLCanvasElement, input: QuoteInput) 
     drawRoundRect(ctx, rx, ry, 6, rh, 6);
     ctx.fill();
 
+    ctx.font = '600 14px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial';
+    ctx.fillStyle = accent;
+    const rName = input.replyName.trim();
+    const rText = (input.replyText || '').trim();
+
     const tx = rx + 12;
     let ty = ry + 10;
 
-    ctx.font = '600 14px ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial';
-    ctx.fillStyle = accent;
-    const nameLines = wrapText(ctx, input.replyName.trim(), rw - 18);
+    const nameLines = wrapText(ctx, rName, rw - 18);
     for (let i = 0; i < Math.min(nameLines.length, 2); i++) {
       ctx.fillText(nameLines[i], tx, ty);
       ty += 18;
@@ -256,7 +275,7 @@ async function renderCardToCanvas(canvas: HTMLCanvasElement, input: QuoteInput) 
 
     ctx.font = smallFont;
     ctx.fillStyle = textSub;
-    const textLines = wrapText(ctx, (input.replyText || '').trim(), rw - 18);
+    const textLines = wrapText(ctx, rText, rw - 18);
     for (let i = 0; i < Math.min(textLines.length, 2); i++) {
       ctx.fillText(textLines[i], tx, ty);
       ty += 18;
@@ -265,11 +284,18 @@ async function renderCardToCanvas(canvas: HTMLCanvasElement, input: QuoteInput) 
     y += replyH + spacing;
   }
 
+  // main text
   ctx.font = bodyFont;
   ctx.fillStyle = textMain;
-  const lines = bodyLines.slice(0, 14);
-  for (let i = 0; i < lines.length; i++) ctx.fillText(lines[i], contentX, y + i * lineH);
 
+  const maxLines = 14;
+  const lines = bodyLines.slice(0, maxLines);
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], contentX, y + i * lineH);
+  }
+  y += lines.length * lineH + 10;
+
+  // footer time
   const now = new Date();
   const hh = String(now.getHours()).padStart(2, '0');
   const mm = String(now.getMinutes()).padStart(2, '0');
@@ -280,8 +306,8 @@ async function renderCardToCanvas(canvas: HTMLCanvasElement, input: QuoteInput) 
   ctx.textAlign = 'left';
 }
 
-async function renderBubbleToCanvas(canvas: HTMLCanvasElement, input: QuoteInput) {
-  const { ctx, W, H } = await setupCanvas(canvas);
+async function renderBubbleToCanvas(canvas: HTMLCanvasElement, input: QuoteInput, displayScale = 1) {
+  const { ctx, W, H } = await setupCanvas(canvas, displayScale);
 
   // Background hitam seperti contoh
   ctx.fillStyle = '#000000';
@@ -342,9 +368,9 @@ async function renderBubbleToCanvas(canvas: HTMLCanvasElement, input: QuoteInput
   }
 }
 
-async function renderQuotlyToCanvas(canvas: HTMLCanvasElement, input: QuoteInput) {
-  if (input.style === 'bubble') return renderBubbleToCanvas(canvas, input);
-  return renderCardToCanvas(canvas, input);
+async function renderQuotlyToCanvas(canvas: HTMLCanvasElement, input: QuoteInput, displayScale = 1) {
+  if (input.style === 'bubble') return renderBubbleToCanvas(canvas, input, displayScale);
+  return renderCardToCanvas(canvas, input, displayScale);
 }
 
 function buildGetUrl(base: string, input: QuoteInput) {
@@ -362,8 +388,11 @@ function buildGetUrl(base: string, input: QuoteInput) {
 
 export default function Page() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const previewBoxRef = useRef<HTMLDivElement | null>(null);
+  const displayScaleRef = useRef(1);
+  const inputRef = useRef<QuoteInput | null>(null);
   const [input, setInput] = useState<QuoteInput>({
-    name: 'Nesa',
+    name: 'Kelvdra',
     text: 'Ini contoh quotly generator tanpa API. Render langsung pakai canvas di browser.',
     avatar: 'https://telegra.ph/file/1e22e45892774893eb1b9.jpg',
     replyName: 'Teman',
@@ -374,6 +403,10 @@ export default function Page() {
   });
   const [status, setStatus] = useState<string>('');
 
+  useEffect(() => {
+    inputRef.current = input;
+  }, [input]);
+
   const getUrl = useMemo(() => {
     if (typeof window === 'undefined') return '';
     return buildGetUrl(`${window.location.origin}/api/quotly`, input);
@@ -383,12 +416,41 @@ export default function Page() {
     try {
       setStatus('Rendering...');
       if (!canvasRef.current) return;
-      await renderQuotlyToCanvas(canvasRef.current, input);
+      await renderQuotlyToCanvas(canvasRef.current, input, displayScaleRef.current);
       setStatus('');
     } catch (e: any) {
       setStatus(e?.message || 'Render error');
     }
   }
+
+  // Keep preview canvas inside its box on small screens.
+  useEffect(() => {
+    const el = previewBoxRef.current;
+    if (!el) return;
+
+    const W = 512;
+    const computeScale = () => {
+      // A small padding so it doesn't touch the edges.
+      const boxW = el.clientWidth;
+      const next = Math.max(0.1, Math.min(1, (boxW - 16) / W));
+      return next;
+    };
+
+    const apply = () => {
+      const next = computeScale();
+      if (Math.abs(next - displayScaleRef.current) < 0.01) return;
+      displayScaleRef.current = next;
+      // Re-render to apply the new CSS size.
+      if (canvasRef.current && inputRef.current)
+        renderQuotlyToCanvas(canvasRef.current, inputRef.current, displayScaleRef.current);
+    };
+
+    apply();
+    const ro = new ResizeObserver(() => apply());
+    ro.observe(el);
+    return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     redraw();
@@ -429,21 +491,21 @@ export default function Page() {
           <section className="rounded-2xl bg-zinc-900/60 p-5 shadow">
             <div className="flex items-center justify-between">
               <h2 className="text-base font-semibold">Input</h2>
-              <div className="flex gap-2">
+              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
                 <button
-                  className="rounded-xl bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-700"
+                  className="w-full rounded-xl bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-700 sm:w-auto"
                   onClick={() => setInput((s) => ({ ...s, theme: s.theme === 'light' ? 'dark' : 'light' }))}
                 >
                   Toggle theme
                 </button>
                 <button
-                  className="rounded-xl bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-700"
+                  className="w-full rounded-xl bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-700 sm:w-auto"
                   onClick={() => setInput((s) => ({ ...s, style: s.style === 'card' ? 'bubble' : 'card' }))}
                 >
                   Toggle style
                 </button>
                 <button
-                  className="rounded-xl bg-emerald-600 px-3 py-2 text-sm hover:bg-emerald-500"
+                  className="w-full rounded-xl bg-emerald-600 px-3 py-2 text-sm hover:bg-emerald-500 sm:w-auto"
                   onClick={downloadPng}
                 >
                   Download PNG
@@ -510,13 +572,13 @@ export default function Page() {
               </label>
 
               <div className="mt-2 rounded-xl bg-zinc-950/40 p-3 ring-1 ring-zinc-800">
-                <div className="flex items-center justify-between gap-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div className="text-sm">
                     <div className="font-semibold">Backend GET (SVG)</div>
                     <div className="text-zinc-300">Bisa kamu panggil dari bot/servis lain via HTTP GET.</div>
                   </div>
                   <button
-                    className="rounded-xl bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-700"
+                    className="w-full rounded-xl bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-700 sm:w-auto"
                     onClick={() => copy(getUrl)}
                     disabled={!getUrl}
                   >
@@ -531,15 +593,21 @@ export default function Page() {
           </section>
 
           <section className="rounded-2xl bg-zinc-900/60 p-5 shadow">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
               <h2 className="text-base font-semibold">Preview</h2>
-              <button className="rounded-xl bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-700" onClick={redraw}>
+              <button
+                className="w-full rounded-xl bg-zinc-800 px-3 py-2 text-sm hover:bg-zinc-700 sm:w-auto"
+                onClick={redraw}
+              >
                 Re-render
               </button>
             </div>
 
-            <div className="mt-4 flex items-center justify-center rounded-2xl bg-zinc-950/40 p-4 ring-1 ring-zinc-800">
-              <canvas ref={canvasRef} className="rounded-xl" />
+            <div
+              ref={previewBoxRef}
+              className="mt-4 flex items-center justify-center overflow-hidden rounded-2xl bg-zinc-950/40 p-4 ring-1 ring-zinc-800"
+            >
+              <canvas ref={canvasRef} className="block rounded-xl" />
             </div>
 
             <div className="mt-4 text-xs text-zinc-300">
